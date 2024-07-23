@@ -275,7 +275,7 @@ El servidor tiene una referencia del cliente y cada vez que ocurre algo el servi
 
 # Detección de terminación
 ## Casos simples
-Cuando un programa esta corriendo en un único procesador, se sabe que ha terminado si:
+Cuando un programa está corriendo en un único procesador, se sabe que ha terminado si:
 - Cada proceso esta bloqueado o terminado
 - No hay operaciones I/O
 
@@ -392,11 +392,13 @@ Cada mozo
     3. envio los cubiertos de vuelta
 
 # Relojes lógicos
-Es imposible sincronizar todos los relojes fisicos por lo que no se pueden usar timestamps convencionales para ordernar
+Es imposible sincronizar todos los relojes físicos, por lo que no se pueden usar timestamps convencionales para ordenar
 
-Un reloj logico es un contador que incrementa a medida que ocurren eventos (send, broacast, receive)
+Un reloj lógico es un contador que incrementa a medida que ocurren eventos (send, broacast, receive)
 
-Cada reloj logico parte en 0 y cada mensajer contiene un timestamp de este reloj
+La idea no es sincronizar físicamente los procesos (imposible), sino tener consistencia en el **orden** de los eventos entre estos.
+
+Cada reloj logico parte en 0 y cada mensaje contiene un timestamp (lógico) de este reloj
 
 ## Algoritmo de Lamport
 Sean:
@@ -414,7 +416,7 @@ El algoritmo de Lamport se define como:
 
 Se incrementa el `lc` después de recibir para que no hayan dos eventos a la misma hora lógica. Por lo mismo, los timestamps deben crecer monotónicamente.
 
-Si dos procesos tienen algún evento en la misma hora lógica, se distinguen por número de proceso.
+Si dos procesos tienen algún evento en la misma hora lógica, se distinguen por número de proceso (si ocurre, es porque los eventos son concurrentes).
 
 ## Multicast totalmente ordenado
 
@@ -430,58 +432,62 @@ La idea del multicasting es que todos los procesos reciban los mensajes en el mi
 - Si el mensaje ha sido reconocido (*acknowledged*) por todos los procesos, se elimina de todas las colas en conjunto con sus ACKs
 
 ## Semaforos distribuidos
-En sistemas de memoria comaprtida, representamos un semáforo s como un entero
+En sistemas de memoria compartida, representamos un semáforo s como un entero no negativo
 
 - `P(s)` espera hasta que `s` sea positivo y lo decrementa
 - `V(s)` incrementa `s`
 
-El numero de operaciones P terminadas es igual a el numero de operaciones V terminadas + s
+El numero de operaciones P terminadas es igual al numero de operaciones V terminadas + el valor inicial de s
 
 ### Implementación
 En cada proceso
 - Una cola local de mensajes mq
 - Un reloj logico lc
 
-Para ejecutar al operacion P o V un proceso hace broacast incluyendo
+Para ejecutar al operacion P o V un proceso hace broadcast a través de mensajes que incluyen
 - Identidad
 - Etiqueta P o V
-- timestamp
+- Timestamp
 
-Broadcast es una operación atomica, los mensajes enviados por dos procesos pueden ser recibidos en ordenes distintos
+Cuando un proceso recibe un mensaje, lo añade a la cola mq ordenando por timestamp
 
-En el multicast totalmente ordenado, los mensaje se en el mismo orden por cada receptor
+Broadcast **NO** es una operación atomica: los mensajes enviados por dos procesos pueden ser recibidos en órdenes distintos
+
+En el multicast totalmente ordenado, los mensajes son en el mismo orden por cada receptor
 
 ### Mensajes totalmente recibidos y prefijos estables
 Si un mensaje `m` tiene un timestamp ts y se reciben mensajes de todos los otros procesos con timestamps > ts, entonces `m` esta totalmente recibido
 
-Ningun mensaje va a tener un timestamp menor que ts
+Todos los mensajes delante de `m` en la cola tienen timestamps menores que ts, por lo que también se consideran totalmente recibidos.
 
-La parte de la cola que tiene mensajes totalmente recibidos se denomina "prefijo estable"
+La parte de la cola que tiene mensajes totalmente recibidos se denomina "prefijo estable" (*i.e.* no se insertarán nuevos mensajes dentro de esa parte)
 
 ### Mensajes ACK de recepcion
-Cada vez que se recibe un P o V se envia un ACK con un timestamp normal y su proposito es apurar la determinacion de cuando un mensaje se vuelve totalmente recibido
+Cada vez que se recibe un P o V se envia un ACK con un timestamp normal y su proposito es apurar la determinación de cuándo un mensaje se vuelve totalmente recibido
 
 ### Actualizacion de prefijos estables
-Cada proceso guarda una variable que representa el valor del semaforo
+Cada proceso guarda una variable s que representa el valor del semáforo
 
 Por cada mensaje en el prefijo esatble
 - Si es V, incremento s y elimino mensaje
 - Si es P, reviso en orden de timestamp. Si s>0 decremento s, y elimino el mensaje
 
-Todos los procesos toman la misma decisiona cerca del orden en que finalizan las operaciones
+Todos los procesos toman la misma decisión acerca del orden en que finalizan las operaciones
 
 ### user y helper
 En cada nodo ocurre que
 
-1. user solicita a helper la ejecuciones de P o V
+1. user solicita a helper las ejecuciones de P o V
 2. en caso de que sea P, user espera hasta autorización
 3. helper entonce se encarga de: 
-    - maneja la cola de mensajes
-    - el valor del semaoro
-    - broacast de solicitudes
-    - recepciones de mensaje P o V mandado por otros helper, incluyendose
+    - manejar la cola de mensajes
+    - el valor del semáforo
+    - broadcast de solicitudes
+    - recepciones de mensaje P o V mandado por otros helper, incluyéndose
 
 ## Relojes vectoriales
+Los relojes de Lamport tradicionales no logran determinar causalidad entre eventos de distintos procesos. La idea de un reloj vectorial es determinar esta causalidad.
+
 Los timestamps pasan a ser vectores con los valores de los vectores logicos de todos los otros procesos
 
 Cada vez que envio un mensaje, envio el vector entero de timestamps
@@ -491,11 +497,12 @@ Actualizo cada entrada del vector al mayor valor que haya visto para esa entrada
 ### Reglas de actualización
 - Antes de ejecutar un evento actualizo mi reloj `V[i] += 1`
 - Al enviar un mensaje adjunto mi reloj vectorial
-- Al recibir un mensaje, ajusto mi propio vector `V[k] = max(V[k], ts(m)[k]) para todo k` 
+- Al recibir un mensaje, ajusto mi propio vector `V[k] = max(V[k], ts(m)[k])` para todo k 
 - Al recibir un mensaje le sumo 1 a mi reloj
 
 ### Causalidad
 Definamos la relacion
+
 $$ts(a) < ts(b) \iff \forall k, ts(a) \leq ts(b) \wedge \exists k', ts(a)[k'] < ts(b)[k']$$
 
 Entonces se puede notar que ts(m1) < ts(m2) podria ser que m2 es causalmente dependiente de m1
@@ -526,52 +533,56 @@ Resolver este tipo de problemas requiere poder asumir que si un computador deja 
 - Los generales tienen mensajeros completamente confiables
 - Los generales pueden ser traidores que intentan que no se llegue a consenso
 
-Hay que diseñar un algoritmo para que todos lo generales lleguen a consenso
+Hay que diseñar un algoritmo para que todos lo generales lleguen a consenso: atacar o retirarse
 
 ### Algoritmo simple de una rueda
-1. Cada nodo envia mensajes y recibe respuestas sobre la cual decision se va a tomar
-2. Si la votación es empate entonces se retiran
+1. Cada nodo envía mensajes y recibe respuestas sobre la decisión que se va a tomar
+2. Si la votación es empate, entonces se retiran
 
 Si un nodo se cae, el resto de nodos no puedan llegar a consenso
 
 ### Algoritmo doble rueda
 1. Se hace una rueda simple 
-2. Por cada nodo envio lo que recibi acerca de los otros nodos
-3. Digo que el voto de un nodo va a ser igual a el voto de mayoria entre los valores reportados para ese nodo y los valores recibidos
+2. Por cada nodo envío lo que recibí acerca de los otros nodos
+3. Digo que el voto de un nodo va a ser igual al voto de mayoría entre los valores reportados para ese nodo y los valores recibidos
 
 Este algoritmo resuelve el problema con fallas simples y el de fallos bizantinos para 4 nodos si 1 falla
 
 Por cada traidor adicional hay que enviar una vuelta adicional de mensajes (que dijo a sobre que dijo b que dijo c)
 
 El numero de generales debe ser $n \geq 3t+1$ con t la cantidad de traidores
-    
 
 # Algoritmos de eleccion
-## Bully
+La idea es elegir un proceso "coordinador", lo cual es requerido por algunos sistemas distribuidos. Si todos los procesos son iguales, entonces no hay una forma trivial de elegir uno. Además, si bien es posible saber los identificadores de cada proceso, no se puede saber certeramente si un proceso (distinto a uno mismo) está activo o no.
+
+## Algoritmo del Bully
 Si un proceso se da cuenta que el coordinador no responde entonces:
-1. k envia mensaje election a todos los procesos con identificadores > k
+1. Proceso k envia mensaje election a todos los procesos con identificadores > k
 2. Si nadie responde, k gana y se vuelve coordinador
 3. Si uno responde, entonces ese se hace cargo
 
 ## Basado en anillo logico
-Cada proceso tiene un sucecesor
+Cada proceso tiene un sucesor
 
 1. Un nodo inicia con un mensaje Election con una cola a la cual se añade
-2. Busca el primero de sus sucesores que conteste y lo envia
+2. Busca el primero de sus sucesores activos y lo envia
 3. Cada nodo al recibir el mensaje se añade a la cola
 4. Cuando da la vuelta entera se elige el con mayor indice
 
 ## Para entornos inalambricos
-1. Un nodo cualquier inicia el algoritmo y envia election a todos sus vecinos
-2. Cuando un nodo recibe election por primera vez, se asigna como padre el que envio y se envia todos sus vecinos
-3. Si se recibe de un nodo diferente se envia un ack
+Los algoritmos de elección tradicionales no son aplicables en entornos inalámbricos, ya que los supuestos no se cumplen (canales estables y topología estática).
+
+1. Un nodo cualquiera inicia el algoritmo y envia election a todos sus vecinos
+2. Cuando un nodo recibe election por primera vez, se asigna como padre el que envió y se envía a todos sus demás vecinos
+3. Si se recibe de un nodo diferente al parent se envia un ack de vuelta inmediatamente
+4. Una vez recibe el ack de todos sus vecinos (excepto el parent), envía un ACK a su nodo padre
 
 
 # Determinacion de topologia
 ## Lamport
 1. El primer nodo envia una sonda a sus vecinos
 2. Cada nodo repite lo mismo
-3. despues cada nodo envia la respuesta con la informacion de la topologia al nodo desde que recibio la sonda
+3. Después cada nodo envía la respuesta con la información de la topología al nodo desde que recibió la sonda
 
 # Arquitecturas descentralizadas p2p
 
@@ -582,34 +593,35 @@ En un sistema peer to peer existen muchas posiblidades de conexiones
 Existe simetria en la mayor parte de interacciones
 
 ## Overlay Network
-Consiste en superponer una red sobre los nodos para forzar un patron de conexion
+
+Consiste en superponer una red sobre los nodos para forzar un patrón de conexión
 
 Existen dos tipos
+
 ### No estructuado
 Cada nodo tiene una lista ad hoc de vecinos
 
-- El overlay resulta aleatorio
-- Se cambia de vecinos continuamente
+- El overlay es un grafo aleatorio
+- Un nodo cambia de vecinos continuamente
 - Para buscar un dato no hay ruta predeterminada
-
 
 #### Flooding
 Para buscar un dato
-1. Nodo u envia una solicitud de busqueda a todos sus vecinos
-2. Si un nodo ya lo recibio la solicitud, se ignora
-3. Si no busca localmente el dato
-4. Si no tiene el dato entonces solicita a todos sus vecinos
-5. Si lo tiene, responde al nodo el cual recibio la solicitud
+1. Nodo `u` envía una solicitud de búsqueda a todos sus vecinos
+2. Si un nodo ya recibió la solicitud, se ignora
+3. Si no, busca localmente el dato
+4. Si no tiene el dato, entonces lo solicita a todos sus vecinos
+5. Si lo tiene, responde al nodo el cual recibió la solicitud
 
-Es un algoritmo muy costoso en terminos de comunicacion
+Es un algoritmo muy costoso en términos de comunicación
 
 Se limita la cantida dde saltos de los mensajes con un TTL
 
 #### Random walks
-1. Un nodo esolicita un dato a un vecino de manera aleatoria
-2. Si no tiene l dato, reenvia la solicitud a otro vecino elegido aleatoriamente
+1. Un nodo solicita un dato a un vecino de manera aleatoria
+2. Si no tiene el dato, reenvía la solicitud a otro vecino elegido aleatoriamente
 
-Puede demorarse mucho en buscar el dato pero se suelen iniciar varias random walks
+Puede demorarse mucho en encontrar el dato, pero se suelen iniciar varias random walks para hacerlo más rápido
 
 ## Estructurado
 ## Hashing
